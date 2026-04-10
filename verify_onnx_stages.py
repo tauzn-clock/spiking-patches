@@ -50,11 +50,13 @@ for _ in range(0):
 tb: TokensBatch = next(loader).inputs
 
 
-tokens = tb.tokens[:1].float()
-pos_x = tb.pos_x[:1].float()
-pos_y = tb.pos_y[:1].float()
-pos_t = tb.pos_t[:1].float()
-padding_mask = tb.padding_mask[:1]
+SEQ = 128
+
+tokens = tb.tokens[:1, :SEQ].float()
+pos_x = tb.pos_x[:1, :SEQ].float()
+pos_y = tb.pos_y[:1, :SEQ].float()
+pos_t = tb.pos_t[:1, :SEQ].float()
+padding_mask = tb.padding_mask[:1, :SEQ]
 BATCH = tokens.shape[0]
 
 
@@ -75,6 +77,7 @@ def export_and_compare(
         input_names=input_names,
         output_names=output_names or ["output"],
         dynamic_axes=dynamic_axes,
+        export_params=True,
         opset_version=17,
     )
     onnx.checker.check_model(onnx.load(path))
@@ -91,6 +94,12 @@ def export_and_compare(
     diff = np.abs(torch_out - onnx_out).max()
     print(f"[{name}] shape: {torch_out.shape}  max abs diff: {diff:.6f}")
 
+    # Save inputs and outputs
+    for input_name, tensor in zip(input_names, inputs):
+        np.save(f"{CKPT_DIR}/stage_{name}_input_{input_name}.npy", tensor.numpy())
+    np.save(f"{CKPT_DIR}/stage_{name}_output_torch.npy", torch_out)
+    np.save(f"{CKPT_DIR}/stage_{name}_output_onnx.npy", onnx_out)
+
     return torch.tensor(torch_out)
 
 
@@ -100,11 +109,7 @@ pos_out = export_and_compare(
     module=classifier.positional,
     inputs=(pos_x, pos_y, pos_t),
     input_names=["pos_x", "pos_y", "pos_t"],
-    dynamic_axes={
-        "pos_x": {0: "batch", 1: "seq"},
-        "pos_y": {0: "batch", 1: "seq"},
-        "pos_t": {0: "batch", 1: "seq"},
-    },
+    dynamic_axes={},
 )
 
 # ── Stage 2: Token Embedding ──────────────────────────────────────────────────
@@ -113,7 +118,7 @@ tok_out = export_and_compare(
     module=classifier.embeddings,
     inputs=(tokens,),
     input_names=["tokens"],
-    dynamic_axes={"tokens": {0: "batch", 1: "seq"}},
+    dynamic_axes={},
 )
 
 # ── Stage 3: Encoder (4 heads + final LayerNorm on CLS) ──────────────────────
@@ -145,10 +150,7 @@ enc_out = export_and_compare(
     module=EncoderOnly(classifier).eval(),
     inputs=(enc_input, enc_padding),
     input_names=["embeddings", "padding_mask"],
-    dynamic_axes={
-        "embeddings":   {0: "batch", 1: "seq"},
-        "padding_mask": {0: "batch", 1: "seq"},
-    },
+    dynamic_axes={},
     output_names=["cls_state"],
 )
 
@@ -158,6 +160,6 @@ export_and_compare(
     module=classifier.head,
     inputs=(enc_out,),
     input_names=["cls_state"],
-    dynamic_axes={"cls_state": {0: "batch"}},
+    dynamic_axes={},
     output_names=["logits"],
 )
