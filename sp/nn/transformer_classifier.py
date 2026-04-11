@@ -220,11 +220,20 @@ class EncoderLayer(nn.Module):
 
         hidden_state = self.norm_self_attention(hidden_state)
 
+        # Pre-tile the padding mask into a float attn_mask of shape
+        # [num_heads, tgt_len, src_len] using cat instead of expand,
+        # so the ONNX graph contains Concat nodes instead of Expand.
+        tgt_len = hidden_state.shape[1]
+        float_mask = padding_mask.float().masked_fill(padding_mask, float("-inf"))  # [batch, src_len]
+        float_mask = float_mask.unsqueeze(1)                                        # [batch, 1, src_len]
+        float_mask = torch.cat([float_mask] * tgt_len, dim=1)                      # [batch, tgt_len, src_len]
+        float_mask = torch.cat([float_mask] * self.self_attn.num_heads, dim=0)     # [batch*num_heads, tgt_len, src_len]
+
         hidden_state, _ = self.self_attn(
             query=hidden_state,
             key=hidden_state,
             value=hidden_state,
-            key_padding_mask=padding_mask,
+            attn_mask=float_mask,
             need_weights=False,
         )
 
